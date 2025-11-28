@@ -2,6 +2,8 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+**Note:** When making significant architectural changes, new endpoints, or configuration updates, please update this CLAUDE.md file to reflect the current state of the codebase.
+
 ## Development Commands
 
 **Run the API:**
