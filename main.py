@@ -5,9 +5,9 @@ from sqlalchemy.orm import sessionmaker, Session
 from datetime import datetime, timezone
 from dateutil import parser
 from typing import List, Dict, Any, Optional
+from pydantic import BaseModel, Field
 import json
 import threading
-import time
 import os
 
 try:
@@ -35,6 +35,57 @@ router = APIRouter()
 engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
+
+# Response models and examples
+class CacheRefreshResponse(BaseModel):
+    message: str = Field(description="Status message")
+
+# Common response examples
+SCHEDULE_EXAMPLES = {
+    "past": {
+        "start": "2023-01-01T09:00:00+00:00",
+        "stop": "2023-01-01T10:00:00+00:00",
+        "title": "Morning News",
+        "description": "Daily news briefing"
+    },
+    "future": {
+        "start": "2023-01-01T14:00:00+00:00",
+        "stop": "2023-01-01T15:00:00+00:00",
+        "title": "Afternoon Show", 
+        "description": "Weekly talk show"
+    },
+    "current": {
+        "start": "2023-01-01T12:00:00+00:00",
+        "stop": "2023-01-01T13:00:00+00:00",
+        "title": "Lunch Hour Music",
+        "description": "Relaxing music during lunch"
+    },
+    "search": {
+        "start": "2023-01-01T18:00:00+00:00", 
+        "stop": "2023-01-01T19:00:00+00:00",
+        "title": "News Hour",
+        "description": "Evening news and current affairs"
+    },
+    "time_query": {
+        "start": "2023-01-01T10:30:00+00:00",
+        "stop": "2023-01-01T11:30:00+00:00", 
+        "title": "Weekend Special",
+        "description": "Special weekend programming"
+    }
+}
+
+def create_schedule_responses(example_key: str):
+    """Create standard schedule endpoint response documentation"""
+    return {
+        200: {
+            "description": "List of schedule entries",
+            "content": {
+                "application/json": {
+                    "example": [SCHEDULE_EXAMPLES[example_key]]
+                }
+            }
+        }
+    }
 
 cache_lock = threading.Lock()
 cache_data = {}
@@ -165,22 +216,56 @@ def get_cached_data(key: str, db: Session):
         # Return empty list if database query fails completely
         return []
 
-@router.get("/previous")
+@router.get(
+    "/previous",
+    response_model=List[Dict[str, Any]],
+    summary="Get past schedule entries",
+    description="Returns all schedule entries that have ended (stop time is in the past).",
+    responses=create_schedule_responses("past")
+)
 async def get_previous_schedule(db: Session = Depends(get_db)):
     return get_cached_data("previous", db)
 
-@router.get("/upnext")
+@router.get(
+    "/upnext",
+    response_model=List[Dict[str, Any]],
+    summary="Get upcoming schedule entries", 
+    description="Returns all schedule entries that haven't started yet (start time is in the future).",
+    responses=create_schedule_responses("future")
+)
 async def get_upnext_schedule(db: Session = Depends(get_db)):
     return get_cached_data("upnext", db)
 
-@router.get("/now")
+@router.get(
+    "/now",
+    response_model=List[Dict[str, Any]],
+    summary="Get currently active schedule entries",
+    description="Returns all schedule entries that are currently active (current time is between start and stop times).",
+    responses=create_schedule_responses("current")
+)
 async def get_current_schedule(db: Session = Depends(get_db)):
     return get_cached_data("now", db)
 
-@router.get("/when")
+@router.get(
+    "/when",
+    response_model=List[Dict[str, Any]],
+    summary="Search schedule entries by content",
+    description="Search for schedule entries by title or description. At least one search parameter must be provided.",
+    responses={
+        **create_schedule_responses("search"),
+        400: {
+            "description": "Bad Request - No search parameters provided",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Either title or description must be provided"}
+                }
+            }
+        }
+    }
+)
 async def search_schedule(
-    title: Optional[str] = Query(None),
-    description: Optional[str] = Query(None),
+    title: Optional[str] = Query(None, description="Search in show titles"),
+    description: Optional[str] = Query(None, description="Search in show descriptions"),
     db: Session = Depends(get_db)
 ):
     if not title and not description:
@@ -236,7 +321,23 @@ def parse_timestamp_lenient(time_str: str) -> tuple[datetime, datetime]:
             detail="Invalid time format. Examples: '2023-01-01', '2023-01-01T10:00:00', '2023-01-01 10:00'"
         )
 
-@router.get("/what")
+@router.get(
+    "/what",
+    response_model=List[Dict[str, Any]], 
+    summary="Get schedule entries for specific time or date",
+    description="Returns schedule entries active at a specific time or during an entire date. Supports flexible time parsing.",
+    responses={
+        **create_schedule_responses("time_query"),
+        400: {
+            "description": "Bad Request - Invalid time format",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Invalid time format. Examples: '2023-01-01', '2023-01-01T10:00:00', '2023-01-01 10:00'"}
+                }
+            }
+        }
+    }
+)
 async def get_schedule_at_time(
     time: str = Query(
         ..., 
@@ -270,9 +371,32 @@ async def get_schedule_at_time(
     except Exception:
         raise HTTPException(status_code=500, detail="Internal server error")
 
-@router.post("/admin/refresh-cache")
+@router.post(
+    "/admin/refresh-cache",
+    response_model=CacheRefreshResponse,
+    summary="Manually refresh cache",
+    description="Manually triggers a cache refresh. Requires admin API key in X-API-Key header.",
+    responses={
+        200: {
+            "description": "Cache refresh successful",
+            "content": {
+                "application/json": {
+                    "example": {"message": "Cache refreshed successfully"}
+                }
+            }
+        },
+        401: {
+            "description": "Unauthorized - Invalid API key",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Invalid API key"}
+                }
+            }
+        }
+    }
+)
 async def manual_cache_refresh(
-    api_key: str = Header(..., alias="X-API-Key"),
+    api_key: str = Header(..., alias="X-API-Key", description="Admin API key for authentication"),
     db: Session = Depends(get_db)
 ):
     if api_key != ADMIN_API_KEY:
