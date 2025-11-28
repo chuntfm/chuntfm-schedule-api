@@ -24,7 +24,13 @@ except ImportError:
     CACHE_ENABLED = os.getenv("CACHE_ENABLED", "True").lower() == "true"
     CACHE_TTL = int(os.getenv("CACHE_TTL", "300"))
 
-app = FastAPI(title=API_TITLE, version=API_VERSION)
+app = FastAPI(
+    title=API_TITLE, 
+    version=API_VERSION,
+    docs_url=f"{API_PREFIX}/docs" if API_PREFIX else "/docs",
+    redoc_url=f"{API_PREFIX}/redoc" if API_PREFIX else "/redoc",
+    openapi_url=f"{API_PREFIX}/openapi.json" if API_PREFIX else "/openapi.json"
+)
 router = APIRouter()
 engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
