@@ -95,3 +95,6 @@ fabric.properties
 /uv.lock
 /.venv/
 /config.py
+/schedule.ics
+/schedule.json
+/schedule.sqlite
