@@ -1,0 +1,57 @@
+# ChuntFM Schedule API
+
+FastAPI read-only API for schedule data with caching.
+
+## Setup
+
+```bash
+pip install -r requirements.txt
+python main.py
+```
+
+## Database Schema
+
+Table: `schedule`
+- `id`: Integer primary key
+- `start`: Timezone-aware timestamp
+- `stop`: Timezone-aware timestamp  
+- `data`: JSON string
+
+## Endpoints
+
+### Time-based Queries
+
+- `GET /schedule/previous` - All entries with stop time in the past
+- `GET /schedule/upnext` - All entries with start time in the future
+- `GET /schedule/now` - All entries currently active (start <= now <= stop)
+
+### Search Queries
+
+- `GET /schedule/when?title=<text>&description=<text>` - Search by title or description (one required)
+- `GET /schedule/what?time=<timestamp>` - Get entries active at specific time (ISO 8601 format)
+
+### Cache Management
+
+- `POST /admin/refresh-cache` - Manually refresh cache
+
+## Cache Refresh Triggers
+
+To trigger cache refresh from database scripts:
+1. Call `POST /admin/refresh-cache` endpoint
+2. Ensure database has `updated_at` or `created_at` timestamp columns for automatic detection
+3. Use database triggers to update timestamp columns on data changes
+
+## Response Format
+
+All endpoints return JSON arrays with items containing:
+```json
+{
+  "id": 1,
+  "start": "2023-01-01T10:00:00+00:00",
+  "stop": "2023-01-01T11:00:00+00:00",
+  "title": "Example",
+  "description": "Example description"
+}
+```
+
+Data field is parsed as JSON and merged into response.
