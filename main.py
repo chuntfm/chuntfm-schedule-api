@@ -217,6 +217,16 @@ def get_cached_data(key: str, db: Session):
         return []
 
 @router.get(
+    "/",
+    response_model=List[Dict[str, Any]],
+    summary="Get all schedule entries",
+    description="Returns all schedule entries regardless of time.",
+    responses=create_schedule_responses("current")
+)
+async def get_all_schedule(db: Session = Depends(get_db)):
+    return get_cached_data("all", db)
+
+@router.get(
     "/previous",
     response_model=List[Dict[str, Any]],
     summary="Get past schedule entries",
