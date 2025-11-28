@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Depends, HTTPException, Query
+from fastapi import FastAPI, Depends, HTTPException, Query, Header
 from sqlalchemy import create_engine, Column, DateTime, String, Integer, text
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session
@@ -7,11 +7,22 @@ from typing import List, Dict, Any, Optional
 import json
 import threading
 import time
-from functools import lru_cache
+import os
 
-app = FastAPI(title="ChuntFM Schedule API", version="0.1.0")
+try:
+    from config import *
+except ImportError:
+    DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./schedule.db")
+    TABLE_NAME = os.getenv("TABLE_NAME", "schedule")
+    HOST = os.getenv("HOST", "0.0.0.0")
+    PORT = int(os.getenv("PORT", "8000"))
+    API_TITLE = os.getenv("API_TITLE", "ChuntFM Schedule API")
+    API_VERSION = os.getenv("API_VERSION", "0.1.0")
+    ADMIN_API_KEY = os.getenv("ADMIN_API_KEY", "change-this-api-key")
+    CACHE_ENABLED = os.getenv("CACHE_ENABLED", "True").lower() == "true"
+    CACHE_TTL = int(os.getenv("CACHE_TTL", "300"))
 
-DATABASE_URL = "sqlite:///./schedule.db"
+app = FastAPI(title=API_TITLE, version=API_VERSION)
 engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
@@ -21,7 +32,7 @@ cache_data = {}
 cache_last_updated = None
 
 class Schedule(Base):
-    __tablename__ = "schedule"
+    __tablename__ = TABLE_NAME
     
     id = Column(Integer, primary_key=True, index=True)
     start = Column(DateTime(timezone=True), nullable=False)
@@ -51,15 +62,29 @@ def get_parsed_data(schedule_item):
 def check_cache_validity(db: Session):
     global cache_last_updated
     
+    if not CACHE_ENABLED:
+        return False
+        
     if cache_last_updated is None:
         return False
     
-    last_db_update = db.execute(
-        text("SELECT MAX(COALESCE(updated_at, created_at, datetime('now'))) FROM schedule")
-    ).scalar()
+    # Check TTL
+    if CACHE_TTL > 0:
+        cache_age = (datetime.now() - cache_last_updated).total_seconds()
+        if cache_age > CACHE_TTL:
+            return False
     
-    if last_db_update and last_db_update > cache_last_updated:
-        return False
+    # Check database timestamps if available
+    try:
+        last_db_update = db.execute(
+            text(f"SELECT MAX(COALESCE(updated_at, created_at, datetime('now'))) FROM {TABLE_NAME}")
+        ).scalar()
+        
+        if last_db_update and last_db_update > cache_last_updated:
+            return False
+    except:
+        # If timestamp columns don't exist, rely on TTL only
+        pass
     
     return True
 
@@ -92,10 +117,31 @@ def refresh_cache(db: Session):
         cache_last_updated = datetime.now()
 
 def get_cached_data(key: str, db: Session):
-    if not check_cache_validity(db):
+    if CACHE_ENABLED and check_cache_validity(db):
+        return cache_data.get(key, [])
+    
+    # Cache disabled or invalid - query database directly
+    now = datetime.now()
+    all_items = db.query(Schedule).all()
+    
+    results = []
+    for item in all_items:
+        parsed_item = get_parsed_data(item)
+        
+        if key == "previous" and item.stop < now:
+            results.append(parsed_item)
+        elif key == "upnext" and item.start > now:
+            results.append(parsed_item)
+        elif key == "now" and item.start <= now <= item.stop:
+            results.append(parsed_item)
+        elif key == "all":
+            results.append(parsed_item)
+    
+    # Refresh cache if enabled but invalid
+    if CACHE_ENABLED and not check_cache_validity(db):
         refresh_cache(db)
     
-    return cache_data.get(key, [])
+    return results
 
 @app.get("/schedule/previous")
 async def get_previous_schedule(db: Session = Depends(get_db)):
@@ -160,10 +206,19 @@ async def get_schedule_at_time(
     return results
 
 @app.post("/admin/refresh-cache")
-async def manual_cache_refresh(db: Session = Depends(get_db)):
+async def manual_cache_refresh(
+    api_key: str = Header(..., alias="X-API-Key"),
+    db: Session = Depends(get_db)
+):
+    if api_key != ADMIN_API_KEY:
+        raise HTTPException(status_code=401, detail="Invalid API key")
+    
+    if not CACHE_ENABLED:
+        return {"message": "Cache is disabled"}
+    
     refresh_cache(db)
     return {"message": "Cache refreshed successfully"}
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host=HOST, port=PORT)
