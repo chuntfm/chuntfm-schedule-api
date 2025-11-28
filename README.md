@@ -24,6 +24,9 @@ gunicorn -c gunicorn.conf.py main:app
 # Using environment variables
 DATABASE_URL=postgresql://user:pass@localhost/db gunicorn -c gunicorn.conf.py main:app
 
+# Run on root path (for reverse proxy routing)
+API_PREFIX="" gunicorn -c gunicorn.conf.py main:app
+
 # Using Docker (example)
 docker run -e DATABASE_URL=postgresql://... -p 8000:8000 your-image
 ```
@@ -47,7 +50,9 @@ Table: `schedule`
 ### Search Queries
 
 - `GET /schedule/when?title=<text>&description=<text>` - Search by title or description (one required)
-- `GET /schedule/what?time=<timestamp>` - Get entries active at specific time (ISO 8601 format)
+- `GET /schedule/what?time=<timestamp>` - Get entries for time/date range
+  - Date only (`2023-01-01`): All shows during that entire day  
+  - Specific time (`2023-01-01T10:00:00`): Shows active at exact moment
 
 ### Cache Management
 

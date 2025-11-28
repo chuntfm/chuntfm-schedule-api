@@ -3,3 +3,4 @@ uvicorn[standard]>=0.38.0
 sqlalchemy>=2.0.44
 gunicorn>=23.0.0
 python-multipart>=0.0.6
+python-dateutil>=2.8.0

@@ -1,8 +1,9 @@
 from fastapi import FastAPI, Depends, HTTPException, Query, Header
 from sqlalchemy import create_engine, Column, DateTime, String, Integer, text
-from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import declarative_base
 from sqlalchemy.orm import sessionmaker, Session
-from datetime import datetime
+from datetime import datetime, timezone
+from dateutil import parser
 from typing import List, Dict, Any, Optional
 import json
 import threading
@@ -18,6 +19,7 @@ except ImportError:
     PORT = int(os.getenv("PORT", "8000"))
     API_TITLE = os.getenv("API_TITLE", "ChuntFM Schedule API")
     API_VERSION = os.getenv("API_VERSION", "0.1.0")
+    API_PREFIX = os.getenv("API_PREFIX", "/schedule")
     ADMIN_API_KEY = os.getenv("ADMIN_API_KEY", "change-this-api-key")
     CACHE_ENABLED = os.getenv("CACHE_ENABLED", "True").lower() == "true"
     CACHE_TTL = int(os.getenv("CACHE_TTL", "300"))
@@ -33,6 +35,7 @@ cache_last_updated = None
 
 class Schedule(Base):
     __tablename__ = TABLE_NAME
+    __table_args__ = {'extend_existing': True}
     
     id = Column(Integer, primary_key=True, index=True)
     start = Column(DateTime(timezone=True), nullable=False)
@@ -70,7 +73,7 @@ def check_cache_validity(db: Session):
     
     # Check TTL
     if CACHE_TTL > 0:
-        cache_age = (datetime.now() - cache_last_updated).total_seconds()
+        cache_age = (datetime.now(timezone.utc) - cache_last_updated).total_seconds()
         if cache_age > CACHE_TTL:
             return False
     
@@ -92,7 +95,7 @@ def refresh_cache(db: Session):
     global cache_data, cache_last_updated
     
     with cache_lock:
-        now = datetime.now()
+        now = datetime.now(timezone.utc)
         
         all_items = db.query(Schedule).all()
         
@@ -114,48 +117,60 @@ def refresh_cache(db: Session):
             elif item.start <= now <= item.stop:
                 cache_data["now"].append(parsed_item)
         
-        cache_last_updated = datetime.now()
+        cache_last_updated = datetime.now(timezone.utc)
 
 def get_cached_data(key: str, db: Session):
-    if CACHE_ENABLED and check_cache_validity(db):
-        return cache_data.get(key, [])
-    
-    # Cache disabled or invalid - query database directly
-    now = datetime.now()
-    all_items = db.query(Schedule).all()
-    
-    results = []
-    for item in all_items:
-        parsed_item = get_parsed_data(item)
+    try:
+        if CACHE_ENABLED and check_cache_validity(db):
+            return cache_data.get(key, [])
         
-        if key == "previous" and item.stop < now:
-            results.append(parsed_item)
-        elif key == "upnext" and item.start > now:
-            results.append(parsed_item)
-        elif key == "now" and item.start <= now <= item.stop:
-            results.append(parsed_item)
-        elif key == "all":
-            results.append(parsed_item)
-    
-    # Refresh cache if enabled but invalid
-    if CACHE_ENABLED and not check_cache_validity(db):
-        refresh_cache(db)
-    
-    return results
+        # Cache disabled or invalid - query database directly
+        now = datetime.now(timezone.utc)
+        all_items = db.query(Schedule).all()
+        
+        results = []
+        for item in all_items:
+            try:
+                parsed_item = get_parsed_data(item)
+                
+                if key == "previous" and item.stop < now:
+                    results.append(parsed_item)
+                elif key == "upnext" and item.start > now:
+                    results.append(parsed_item)
+                elif key == "now" and item.start <= now <= item.stop:
+                    results.append(parsed_item)
+                elif key == "all":
+                    results.append(parsed_item)
+            except Exception:
+                # Skip malformed records
+                continue
+        
+        # Refresh cache if enabled but invalid
+        if CACHE_ENABLED and not check_cache_validity(db):
+            try:
+                refresh_cache(db)
+            except Exception:
+                # Cache refresh failed, continue with direct query results
+                pass
+        
+        return results
+    except Exception:
+        # Return empty list if database query fails completely
+        return []
 
-@app.get("/schedule/previous")
+@app.get(f"{API_PREFIX}/previous")
 async def get_previous_schedule(db: Session = Depends(get_db)):
     return get_cached_data("previous", db)
 
-@app.get("/schedule/upnext")
+@app.get(f"{API_PREFIX}/upnext")
 async def get_upnext_schedule(db: Session = Depends(get_db)):
     return get_cached_data("upnext", db)
 
-@app.get("/schedule/now")
+@app.get(f"{API_PREFIX}/now")
 async def get_current_schedule(db: Session = Depends(get_db)):
     return get_cached_data("now", db)
 
-@app.get("/schedule/when")
+@app.get(f"{API_PREFIX}/when")
 async def search_schedule(
     title: Optional[str] = Query(None),
     description: Optional[str] = Query(None),
@@ -183,29 +198,72 @@ async def search_schedule(
     
     return results
 
-@app.get("/schedule/what")
+def parse_timestamp_lenient(time_str: str) -> tuple[datetime, datetime]:
+    """Parse timestamp with various formats, returning (start_time, end_time) for range queries"""
+    try:
+        # Try ISO format first
+        if 'T' in time_str or '+' in time_str or 'Z' in time_str:
+            dt = datetime.fromisoformat(time_str.replace('Z', '+00:00'))
+            return (dt, dt)
+        
+        # Use dateutil for flexible parsing
+        parsed = parser.parse(time_str)
+        
+        # If no timezone info, assume UTC
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        
+        # If it looks like just a date (no time component), make it a day range
+        if time_str.count(':') == 0 and ('T' not in time_str):
+            # Date only - return full day range
+            start_of_day = parsed.replace(hour=0, minute=0, second=0, microsecond=0)
+            end_of_day = parsed.replace(hour=23, minute=59, second=59, microsecond=999999)
+            return (start_of_day, end_of_day)
+        else:
+            # Specific time - return exact moment
+            return (parsed, parsed)
+            
+    except (ValueError, TypeError):
+        raise HTTPException(
+            status_code=400, 
+            detail="Invalid time format. Examples: '2023-01-01', '2023-01-01T10:00:00', '2023-01-01 10:00'"
+        )
+
+@app.get(f"{API_PREFIX}/what")
 async def get_schedule_at_time(
-    time: str = Query(..., description="ISO 8601 timestamp"),
+    time: str = Query(
+        ..., 
+        description="Timestamp or date. Date-only queries (e.g., '2023-01-01') return all shows for that entire day. Specific times (e.g., '2023-01-01T10:00:00') return shows active at that exact moment.",
+        examples=["2023-01-01", "2023-01-01T10:00:00", "2023-01-01 10:00"]
+    ),
     db: Session = Depends(get_db)
 ):
     try:
-        target_time = datetime.fromisoformat(time.replace('Z', '+00:00'))
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid time format. Use ISO 8601 format")
-    
-    all_items = get_cached_data("all", db)
-    results = []
-    
-    for item in all_items:
-        start_time = datetime.fromisoformat(item["start"].replace('Z', '+00:00'))
-        stop_time = datetime.fromisoformat(item["stop"].replace('Z', '+00:00'))
+        query_start, query_end = parse_timestamp_lenient(time)
         
-        if start_time <= target_time <= stop_time:
-            results.append(item)
-    
-    return results
+        all_items = get_cached_data("all", db)
+        results = []
+        
+        for item in all_items:
+            try:
+                start_time = datetime.fromisoformat(item["start"].replace('Z', '+00:00'))
+                stop_time = datetime.fromisoformat(item["stop"].replace('Z', '+00:00'))
+                
+                # Check if show overlaps with query time range
+                # Show overlaps if: show_start <= query_end AND show_end >= query_start
+                if start_time <= query_end and stop_time >= query_start:
+                    results.append(item)
+            except Exception:
+                # Skip malformed timestamps in data
+                continue
+        
+        return results
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=500, detail="Internal server error")
 
-@app.post("/admin/refresh-cache")
+@app.post(f"{API_PREFIX}/admin/refresh-cache")
 async def manual_cache_refresh(
     api_key: str = Header(..., alias="X-API-Key"),
     db: Session = Depends(get_db)

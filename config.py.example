@@ -1,7 +1,7 @@
 import os
 
 # Database Configuration
-DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./schedule.db")
+DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./schedule.sqlite")
 TABLE_NAME = os.getenv("TABLE_NAME", "schedule")
 
 # Server Configuration  
@@ -23,3 +23,4 @@ LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 # API Configuration
 API_TITLE = os.getenv("API_TITLE", "ChuntFM Schedule API")
 API_VERSION = os.getenv("API_VERSION", "0.1.0")
+API_PREFIX = os.getenv("API_PREFIX", "/schedule")  # Set to "" for root path
