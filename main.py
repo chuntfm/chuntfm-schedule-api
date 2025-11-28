@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Depends, HTTPException, Query, Header
+from fastapi import FastAPI, Depends, HTTPException, Query, Header, APIRouter
 from sqlalchemy import create_engine, Column, DateTime, String, Integer, text
 from sqlalchemy.orm import declarative_base
 from sqlalchemy.orm import sessionmaker, Session
@@ -25,6 +25,7 @@ except ImportError:
     CACHE_TTL = int(os.getenv("CACHE_TTL", "300"))
 
 app = FastAPI(title=API_TITLE, version=API_VERSION)
+router = APIRouter()
 engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
@@ -158,19 +159,19 @@ def get_cached_data(key: str, db: Session):
         # Return empty list if database query fails completely
         return []
 
-@app.get(f"{API_PREFIX}/previous")
+@router.get("/previous")
 async def get_previous_schedule(db: Session = Depends(get_db)):
     return get_cached_data("previous", db)
 
-@app.get(f"{API_PREFIX}/upnext")
+@router.get("/upnext")
 async def get_upnext_schedule(db: Session = Depends(get_db)):
     return get_cached_data("upnext", db)
 
-@app.get(f"{API_PREFIX}/now")
+@router.get("/now")
 async def get_current_schedule(db: Session = Depends(get_db)):
     return get_cached_data("now", db)
 
-@app.get(f"{API_PREFIX}/when")
+@router.get("/when")
 async def search_schedule(
     title: Optional[str] = Query(None),
     description: Optional[str] = Query(None),
@@ -229,7 +230,7 @@ def parse_timestamp_lenient(time_str: str) -> tuple[datetime, datetime]:
             detail="Invalid time format. Examples: '2023-01-01', '2023-01-01T10:00:00', '2023-01-01 10:00'"
         )
 
-@app.get(f"{API_PREFIX}/what")
+@router.get("/what")
 async def get_schedule_at_time(
     time: str = Query(
         ..., 
@@ -263,7 +264,7 @@ async def get_schedule_at_time(
     except Exception:
         raise HTTPException(status_code=500, detail="Internal server error")
 
-@app.post(f"{API_PREFIX}/admin/refresh-cache")
+@router.post("/admin/refresh-cache")
 async def manual_cache_refresh(
     api_key: str = Header(..., alias="X-API-Key"),
     db: Session = Depends(get_db)
@@ -276,6 +277,9 @@ async def manual_cache_refresh(
     
     refresh_cache(db)
     return {"message": "Cache refreshed successfully"}
+
+# Mount the router
+app.include_router(router, prefix=API_PREFIX)
 
 if __name__ == "__main__":
     import uvicorn

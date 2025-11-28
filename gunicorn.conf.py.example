@@ -1,5 +1,6 @@
 import os
 
+wsgi_app = "main:app"
 bind = f"{os.getenv('HOST', '0.0.0.0')}:{os.getenv('PORT', '8000')}"
 workers = int(os.getenv("WORKERS", "4"))
 worker_class = "uvicorn.workers.UvicornWorker"
