@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 import json
 import threading
 import os
+import httpx
 
 try:
     from config import *
@@ -380,6 +381,63 @@ async def get_schedule_at_time(
         raise
     except Exception:
         raise HTTPException(status_code=500, detail="Internal server error")
+
+RESTREAM_URL = "https://chunt.org/restream.json"
+
+@router.get(
+    "/restream/now",
+    response_model=Dict[str, Any],
+    summary="Get current restream info",
+    description="Fetches the currently playing restream from chunt.org and returns it in schedule-compatible format.",
+    responses={
+        200: {
+            "description": "Current restream entry",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "start": "2023-01-01T12:00:00+00:00",
+                        "stop": "2023-01-01T13:00:00+00:00",
+                        "title": "relaxed fit w/ largetrousers",
+                        "description": None,
+                        "show_date": "2023-01-01",
+                        "show_url": "https://www.mixcloud.com/example/",
+                        "duration": 3600
+                    }
+                }
+            }
+        },
+        502: {
+            "description": "Failed to fetch restream data",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Failed to fetch restream data"}
+                }
+            }
+        }
+    }
+)
+async def get_restream():
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(RESTREAM_URL, timeout=10.0)
+            response.raise_for_status()
+    except httpx.HTTPError:
+        raise HTTPException(status_code=502, detail="Failed to fetch restream data")
+
+    data = response.json()
+    current = data.get("current")
+    if not current:
+        raise HTTPException(status_code=404, detail="No current restream")
+
+    return {
+        "start": current.get("start_timestamp_uk"),
+        "stop": current.get("end_timestamp_uk"),
+        "title": current.get("show_title"),
+        "description": current.get("description"),
+        "show_date": current.get("show_date"),
+        "show_url": current.get("show_url"),
+        "duration": current.get("duration"),
+    }
 
 @router.post(
     "/admin/refresh-cache",
