@@ -24,6 +24,7 @@ except ImportError:
     ADMIN_API_KEY = os.getenv("ADMIN_API_KEY", "change-this-api-key")
     CACHE_ENABLED = os.getenv("CACHE_ENABLED", "True").lower() == "true"
     CACHE_TTL = int(os.getenv("CACHE_TTL", "300"))
+    RESTREAM_URL = os.getenv("RESTREAM_URL", "https://chunt.org/restream.json")
 
 app = FastAPI(
     title=API_TITLE, 
@@ -381,8 +382,6 @@ async def get_schedule_at_time(
         raise
     except Exception:
         raise HTTPException(status_code=500, detail="Internal server error")
-
-RESTREAM_URL = "https://chunt.org/restream.json"
 
 @router.get(
     "/restream/now",
