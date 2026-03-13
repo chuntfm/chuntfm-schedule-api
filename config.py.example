@@ -24,3 +24,8 @@ LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 API_TITLE = os.getenv("API_TITLE", "ChuntFM Schedule API")
 API_VERSION = os.getenv("API_VERSION", "0.1.0")
 API_PREFIX = os.getenv("API_PREFIX", "/schedule")  # Set to "" for root path
+
+# External Sources
+RESTREAM_URL = os.getenv("RESTREAM_URL", "https://chunt.org/restream.json")
+RESTREAM_CACHE_ENABLED = os.getenv("RESTREAM_CACHE_ENABLED", "True").lower() == "true"
+RESTREAM_CACHE_TTL = int(os.getenv("RESTREAM_CACHE_TTL", "60"))  # seconds

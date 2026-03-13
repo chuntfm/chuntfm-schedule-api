@@ -3,14 +3,19 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import create_engine, Column, DateTime, String, Integer, text
 from sqlalchemy.orm import declarative_base
 from sqlalchemy.orm import sessionmaker, Session
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from dateutil import parser
 from typing import List, Dict, Any, Optional
 from pydantic import BaseModel, Field
+import asyncio
 import json
+import logging
 import threading
 import os
 import httpx
+
+logger = logging.getLogger(__name__)
 
 try:
     from config import *
@@ -26,10 +31,60 @@ except ImportError:
     CACHE_ENABLED = os.getenv("CACHE_ENABLED", "True").lower() == "true"
     CACHE_TTL = int(os.getenv("CACHE_TTL", "300"))
     RESTREAM_URL = os.getenv("RESTREAM_URL", "https://chunt.org/restream.json")
+    RESTREAM_CACHE_ENABLED = os.getenv("RESTREAM_CACHE_ENABLED", "True").lower() == "true"
+    RESTREAM_CACHE_TTL = int(os.getenv("RESTREAM_CACHE_TTL", "60"))
+
+# Restream cache
+_restream_cache = {"data": None, "updated_at": None}
+_restream_client = None
+
+def _parse_restream(raw: dict) -> Optional[dict]:
+    current = raw.get("current")
+    if not current:
+        return None
+    return {
+        "start": current.get("start_timestamp_uk"),
+        "stop": current.get("end_timestamp_uk"),
+        "title": current.get("show_title"),
+        "description": current.get("description"),
+        "show_date": current.get("show_date"),
+        "show_url": current.get("show_url"),
+        "duration": current.get("duration"),
+    }
+
+async def _fetch_restream():
+    global _restream_client
+    try:
+        response = await _restream_client.get(RESTREAM_URL, timeout=10.0)
+        response.raise_for_status()
+        parsed = _parse_restream(response.json())
+        if parsed is not None:
+            _restream_cache["data"] = parsed
+            _restream_cache["updated_at"] = datetime.now(timezone.utc)
+    except Exception:
+        logger.warning("Failed to fetch restream data")
+
+async def _restream_poller():
+    while True:
+        await _fetch_restream()
+        await asyncio.sleep(RESTREAM_CACHE_TTL)
+
+@asynccontextmanager
+async def lifespan(app):
+    global _restream_client
+    _restream_client = httpx.AsyncClient()
+    task = None
+    if RESTREAM_CACHE_ENABLED:
+        task = asyncio.create_task(_restream_poller())
+    yield
+    if task:
+        task.cancel()
+    await _restream_client.aclose()
 
 app = FastAPI(
-    title=API_TITLE, 
+    title=API_TITLE,
     version=API_VERSION,
+    lifespan=lifespan,
     docs_url=f"{API_PREFIX}/docs" if API_PREFIX else "/docs",
     redoc_url=f"{API_PREFIX}/redoc" if API_PREFIX else "/redoc",
     openapi_url=f"{API_PREFIX}/openapi.json" if API_PREFIX else "/openapi.json"
@@ -423,27 +478,20 @@ async def get_schedule_at_time(
     }
 )
 async def get_restream():
+    if RESTREAM_CACHE_ENABLED and _restream_cache["data"] is not None:
+        return _restream_cache["data"]
+
+    # Cache disabled or not yet populated: fetch directly
     try:
-        async with httpx.AsyncClient() as client:
-            response = await client.get(RESTREAM_URL, timeout=10.0)
-            response.raise_for_status()
+        response = await _restream_client.get(RESTREAM_URL, timeout=10.0)
+        response.raise_for_status()
     except httpx.HTTPError:
         raise HTTPException(status_code=502, detail="Failed to fetch restream data")
 
-    data = response.json()
-    current = data.get("current")
-    if not current:
+    parsed = _parse_restream(response.json())
+    if parsed is None:
         raise HTTPException(status_code=404, detail="No current restream")
-
-    return {
-        "start": current.get("start_timestamp_uk"),
-        "stop": current.get("end_timestamp_uk"),
-        "title": current.get("show_title"),
-        "description": current.get("description"),
-        "show_date": current.get("show_date"),
-        "show_url": current.get("show_url"),
-        "duration": current.get("duration"),
-    }
+    return parsed
 
 @router.post(
     "/admin/refresh-cache",
