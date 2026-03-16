@@ -3,12 +3,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import create_engine, Column, DateTime, String, Integer, text
 from sqlalchemy.orm import declarative_base
 from sqlalchemy.orm import sessionmaker, Session
-from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from dateutil import parser
 from typing import List, Dict, Any, Optional
 from pydantic import BaseModel, Field
-import asyncio
 import json
 import logging
 import threading
@@ -36,7 +34,6 @@ except ImportError:
 
 # Restream cache
 _restream_cache = {"data": None, "updated_at": None}
-_restream_client = None
 
 def _parse_restream(raw: dict) -> Optional[dict]:
     current = raw.get("current")
@@ -52,67 +49,35 @@ def _parse_restream(raw: dict) -> Optional[dict]:
         "duration": current.get("duration"),
     }
 
-async def _fetch_restream():
-    global _restream_client
-    try:
-        response = await _restream_client.get(
-            RESTREAM_URL,
-            timeout=10.0,
-            headers={"Cache-Control": "no-cache"},
-        )
-        response.raise_for_status()
-        parsed = _parse_restream(response.json())
-        _restream_cache["data"] = parsed  # None clears stale data
-        _restream_cache["updated_at"] = datetime.now(timezone.utc)
-    except Exception:
-        logger.warning("Failed to fetch restream data")
+def _restream_cache_stale() -> bool:
+    """Check if the restream cache needs refreshing, with adaptive TTL."""
+    if not RESTREAM_CACHE_ENABLED:
+        return True
+    if _restream_cache["updated_at"] is None:
+        return True
 
-def _restream_poll_interval() -> float:
-    """Shorten the poll interval as the current show's stop time approaches."""
+    now = datetime.now(timezone.utc)
+    age = (now - _restream_cache["updated_at"]).total_seconds()
+
+    # Adaptive TTL: shorten near end of current show
+    ttl = RESTREAM_CACHE_TTL
     cached = _restream_cache.get("data")
-    if not cached or not cached.get("stop"):
-        return RESTREAM_CACHE_TTL
-
-    try:
-        stop = datetime.fromisoformat(cached["stop"])
-        remaining = (stop - datetime.now(timezone.utc)).total_seconds()
-        if remaining <= 0:
-            # Show already ended, poll quickly to pick up the next one
-            return 5
-        if remaining < RESTREAM_CACHE_TTL:
-            # Close to the end, poll at most every 5 seconds
-            return max(5, remaining / 2)
-    except (ValueError, TypeError):
-        pass
-
-    return RESTREAM_CACHE_TTL
-
-async def _restream_poller():
-    while True:
+    if cached and cached.get("stop"):
         try:
-            await _fetch_restream()
-            interval = _restream_poll_interval()
-        except Exception:
-            logger.exception("Restream poller error")
-            interval = RESTREAM_CACHE_TTL
-        await asyncio.sleep(interval)
+            stop = datetime.fromisoformat(cached["stop"])
+            remaining = (stop - now).total_seconds()
+            if remaining <= 0:
+                ttl = 5
+            elif remaining < RESTREAM_CACHE_TTL:
+                ttl = max(5, remaining / 2)
+        except (ValueError, TypeError):
+            pass
 
-@asynccontextmanager
-async def lifespan(app):
-    global _restream_client
-    _restream_client = httpx.AsyncClient()
-    task = None
-    if RESTREAM_CACHE_ENABLED:
-        task = asyncio.create_task(_restream_poller())
-    yield
-    if task:
-        task.cancel()
-    await _restream_client.aclose()
+    return age >= ttl
 
 app = FastAPI(
     title=API_TITLE,
     version=API_VERSION,
-    lifespan=lifespan,
     docs_url=f"{API_PREFIX}/docs" if API_PREFIX else "/docs",
     redoc_url=f"{API_PREFIX}/redoc" if API_PREFIX else "/redoc",
     openapi_url=f"{API_PREFIX}/openapi.json" if API_PREFIX else "/openapi.json"
@@ -506,21 +471,27 @@ async def get_schedule_at_time(
     }
 )
 async def get_restream():
-    if RESTREAM_CACHE_ENABLED and _restream_cache["data"] is not None:
+    if not _restream_cache_stale() and _restream_cache["data"] is not None:
         return _restream_cache["data"]
 
-    # Cache disabled or not yet populated: fetch directly
     try:
-        response = await _restream_client.get(
-            RESTREAM_URL,
-            timeout=10.0,
-            headers={"Cache-Control": "no-cache"},
-        )
-        response.raise_for_status()
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                RESTREAM_URL,
+                timeout=10.0,
+                headers={"Cache-Control": "no-cache"},
+            )
+            response.raise_for_status()
     except httpx.HTTPError:
+        # On fetch failure, serve stale cache if available
+        if _restream_cache["data"] is not None:
+            return _restream_cache["data"]
         raise HTTPException(status_code=502, detail="Failed to fetch restream data")
 
     parsed = _parse_restream(response.json())
+    _restream_cache["data"] = parsed
+    _restream_cache["updated_at"] = datetime.now(timezone.utc)
+
     if parsed is None:
         raise HTTPException(status_code=404, detail="No current restream")
     return parsed
