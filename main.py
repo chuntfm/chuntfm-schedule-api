@@ -18,19 +18,22 @@ logger = logging.getLogger(__name__)
 try:
     from config import *
 except ImportError:
-    DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./schedule.db")
-    TABLE_NAME = os.getenv("TABLE_NAME", "schedule")
-    HOST = os.getenv("HOST", "0.0.0.0")
-    PORT = int(os.getenv("PORT", "8000"))
-    API_TITLE = os.getenv("API_TITLE", "ChuntFM Schedule API")
-    API_VERSION = os.getenv("API_VERSION", "0.1.0")
-    API_PREFIX = os.getenv("API_PREFIX", "/schedule")
-    ADMIN_API_KEY = os.getenv("ADMIN_API_KEY", "change-this-api-key")
-    CACHE_ENABLED = os.getenv("CACHE_ENABLED", "True").lower() == "true"
-    CACHE_TTL = int(os.getenv("CACHE_TTL", "300"))
-    RESTREAM_URL = os.getenv("RESTREAM_URL", "https://assets.chunt.org/restream.json")
-    RESTREAM_CACHE_ENABLED = os.getenv("RESTREAM_CACHE_ENABLED", "True").lower() == "true"
-    RESTREAM_CACHE_TTL = int(os.getenv("RESTREAM_CACHE_TTL", "60"))
+    pass
+
+# Defaults for any config values not set by config.py or environment
+DATABASE_URL = globals().get("DATABASE_URL", os.getenv("DATABASE_URL", "sqlite:///./schedule.db"))
+TABLE_NAME = globals().get("TABLE_NAME", os.getenv("TABLE_NAME", "schedule"))
+HOST = globals().get("HOST", os.getenv("HOST", "0.0.0.0"))
+PORT = int(globals().get("PORT", os.getenv("PORT", "8000")))
+API_TITLE = globals().get("API_TITLE", os.getenv("API_TITLE", "ChuntFM Schedule API"))
+API_VERSION = globals().get("API_VERSION", os.getenv("API_VERSION", "0.1.0"))
+API_PREFIX = globals().get("API_PREFIX", os.getenv("API_PREFIX", "/schedule"))
+ADMIN_API_KEY = globals().get("ADMIN_API_KEY", os.getenv("ADMIN_API_KEY", "change-this-api-key"))
+CACHE_ENABLED = globals().get("CACHE_ENABLED", os.getenv("CACHE_ENABLED", "True").lower() == "true")
+CACHE_TTL = int(globals().get("CACHE_TTL", os.getenv("CACHE_TTL", "300")))
+RESTREAM_URL = globals().get("RESTREAM_URL", os.getenv("RESTREAM_URL", "https://assets.chunt.org/restream.json"))
+RESTREAM_CACHE_ENABLED = globals().get("RESTREAM_CACHE_ENABLED", os.getenv("RESTREAM_CACHE_ENABLED", "True").lower() == "true")
+RESTREAM_CACHE_TTL = int(globals().get("RESTREAM_CACHE_TTL", os.getenv("RESTREAM_CACHE_TTL", "60")))
 
 # Restream cache
 _restream_cache = {"data": None, "updated_at": None}
