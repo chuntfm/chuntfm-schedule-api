@@ -64,10 +64,30 @@ async def _fetch_restream():
     except Exception:
         logger.warning("Failed to fetch restream data")
 
+def _restream_poll_interval() -> float:
+    """Shorten the poll interval as the current show's stop time approaches."""
+    cached = _restream_cache.get("data")
+    if not cached or not cached.get("stop"):
+        return RESTREAM_CACHE_TTL
+
+    try:
+        stop = datetime.fromisoformat(cached["stop"])
+        remaining = (stop - datetime.now(timezone.utc)).total_seconds()
+        if remaining <= 0:
+            # Show already ended, poll quickly to pick up the next one
+            return 5
+        if remaining < RESTREAM_CACHE_TTL:
+            # Close to the end, poll at most every 5 seconds
+            return max(5, remaining / 2)
+    except (ValueError, TypeError):
+        pass
+
+    return RESTREAM_CACHE_TTL
+
 async def _restream_poller():
     while True:
         await _fetch_restream()
-        await asyncio.sleep(RESTREAM_CACHE_TTL)
+        await asyncio.sleep(_restream_poll_interval())
 
 @asynccontextmanager
 async def lifespan(app):
