@@ -30,7 +30,7 @@ except ImportError:
     ADMIN_API_KEY = os.getenv("ADMIN_API_KEY", "change-this-api-key")
     CACHE_ENABLED = os.getenv("CACHE_ENABLED", "True").lower() == "true"
     CACHE_TTL = int(os.getenv("CACHE_TTL", "300"))
-    RESTREAM_URL = os.getenv("RESTREAM_URL", "https://chunt.org/restream.json")
+    RESTREAM_URL = os.getenv("RESTREAM_URL", "https://assets.chunt.org/restream.json")
     RESTREAM_CACHE_ENABLED = os.getenv("RESTREAM_CACHE_ENABLED", "True").lower() == "true"
     RESTREAM_CACHE_TTL = int(os.getenv("RESTREAM_CACHE_TTL", "60"))
 
@@ -55,12 +55,15 @@ def _parse_restream(raw: dict) -> Optional[dict]:
 async def _fetch_restream():
     global _restream_client
     try:
-        response = await _restream_client.get(RESTREAM_URL, timeout=10.0)
+        response = await _restream_client.get(
+            RESTREAM_URL,
+            timeout=10.0,
+            headers={"Cache-Control": "no-cache"},
+        )
         response.raise_for_status()
         parsed = _parse_restream(response.json())
-        if parsed is not None:
-            _restream_cache["data"] = parsed
-            _restream_cache["updated_at"] = datetime.now(timezone.utc)
+        _restream_cache["data"] = parsed  # None clears stale data
+        _restream_cache["updated_at"] = datetime.now(timezone.utc)
     except Exception:
         logger.warning("Failed to fetch restream data")
 
@@ -86,8 +89,13 @@ def _restream_poll_interval() -> float:
 
 async def _restream_poller():
     while True:
-        await _fetch_restream()
-        await asyncio.sleep(_restream_poll_interval())
+        try:
+            await _fetch_restream()
+            interval = _restream_poll_interval()
+        except Exception:
+            logger.exception("Restream poller error")
+            interval = RESTREAM_CACHE_TTL
+        await asyncio.sleep(interval)
 
 @asynccontextmanager
 async def lifespan(app):
@@ -503,7 +511,11 @@ async def get_restream():
 
     # Cache disabled or not yet populated: fetch directly
     try:
-        response = await _restream_client.get(RESTREAM_URL, timeout=10.0)
+        response = await _restream_client.get(
+            RESTREAM_URL,
+            timeout=10.0,
+            headers={"Cache-Control": "no-cache"},
+        )
         response.raise_for_status()
     except httpx.HTTPError:
         raise HTTPException(status_code=502, detail="Failed to fetch restream data")
