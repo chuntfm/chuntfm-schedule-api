@@ -44,6 +44,11 @@ Table: `schedule`
 ### Time-based Queries
 
 - `GET /schedule/previous` - All entries with stop time in the past
+  - Optional paging: `?limit=<n>&offset=<n>` (`limit` at least 1, `offset` at least 0, otherwise a 422 validation error)
+  - With either parameter, entries are sorted most recent first (by `stop`, then `start`, then `id`)
+  - A page shorter than `limit` means there are no older entries; an `offset` past the end returns `[]`
+  - `offset` without `limit` returns all remaining entries
+  - With neither parameter, all entries are returned in the default order, which is not sorted by recency
 - `GET /schedule/upnext` - All entries with start time in the future
 - `GET /schedule/now` - All entries currently active (start <= now <= stop)
 
