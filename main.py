@@ -288,15 +288,41 @@ def get_cached_data(key: str, db: Session):
 async def get_all_schedule(db: Session = Depends(get_db)):
     return get_cached_data("all", db)
 
+def sort_most_recent_first(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Return a new list sorted by stop, then start, then id, most recent first.
+
+    Timestamps share one UTC ISO format, so text order matches time order.
+    """
+    return sorted(
+        items,
+        key=lambda item: (str(item["stop"]), str(item["start"]), str(item["id"])),
+        reverse=True
+    )
+
 @router.get(
     "/previous",
     response_model=List[Dict[str, Any]],
     summary="Get past schedule entries",
-    description="Returns all schedule entries that have ended (stop time is in the past).",
+    description=(
+        "Returns all schedule entries that have ended (stop time is in the past). "
+        "With limit or offset, entries are sorted most recent first (by stop time, then start time, then id). "
+        "A page shorter than limit means there are no older entries. "
+        "Without either parameter, all entries are returned in the default order, which is not sorted by recency."
+    ),
     responses=create_schedule_responses("past")
 )
-async def get_previous_schedule(db: Session = Depends(get_db)):
-    return get_cached_data("previous", db)
+async def get_previous_schedule(
+    limit: Optional[int] = Query(None, ge=1, description="Maximum number of entries to return, most recent first."),
+    offset: Optional[int] = Query(None, ge=0, description="Number of most recent entries to skip. Without limit, returns all remaining entries."),
+    db: Session = Depends(get_db)
+):
+    items = get_cached_data("previous", db)
+    if limit is None and offset is None:
+        return items
+
+    first = offset or 0
+    last = None if limit is None else first + limit
+    return sort_most_recent_first(items)[first:last]
 
 @router.get(
     "/upnext",
